@@ -2,11 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"time"
+
+	model "demogas.com/m/model"
+	"demogas.com/m/mongo"
+	"github.com/google/uuid"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
@@ -21,7 +25,8 @@ var cache store.Cache
 
 func main() {
 	r := mux.NewRouter()
-	port := os.Getenv("PORT")
+	//port := os.Getenv("PORT")
+	port := "8000"
 	setupGoGuardian()
 	r.HandleFunc("/v1/auth/token", middleware(http.HandlerFunc(createToken))).Methods("GET")
 	r.HandleFunc("/createAccount", middleware(http.HandlerFunc(createAccount))).Methods("POST")
@@ -88,6 +93,29 @@ func createToken(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(jwtToken))
 }
 func createAccount(w http.ResponseWriter, r *http.Request) {
+
+	// if err != nil {
+	// 	code := http.StatusInternalServerError
+	// 	http.Error(w, err.Error(), code)
+	// 	return
+	// }
+	decoder := json.NewDecoder(r.Body)
+	var newUser model.User
+	err := decoder.Decode(&newUser)
+
+	if err != nil {
+		code := http.StatusBadRequest
+		http.Error(w, err.Error(), code)
+		return
+	}
+
+	newUser.Id = uuid.NewString()
+	err = mongo.CreateUser(newUser)
+	if err != nil {
+		log.Panicln(err)
+		return
+	}
+
 }
 func editAccount(w http.ResponseWriter, r *http.Request) {
 }
