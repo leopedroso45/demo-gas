@@ -11,6 +11,7 @@ import (
 	model "demogas.com/m/model"
 	"demogas.com/m/mongo"
 	"github.com/google/uuid"
+	"go.mongodb.org/mongo-driver/bson"
 
 	"github.com/dgrijalva/jwt-go"
 	"github.com/gorilla/mux"
@@ -29,9 +30,10 @@ func main() {
 	port := "8000"
 	setupGoGuardian()
 	r.HandleFunc("/v1/auth/token", middleware(http.HandlerFunc(createToken))).Methods("GET")
-	r.HandleFunc("/createAccount", middleware(http.HandlerFunc(createAccount))).Methods("POST")
-	r.HandleFunc("/editAccount", middleware(http.HandlerFunc(editAccount))).Methods("PUT")
-	r.HandleFunc("/removeAccount", middleware(http.HandlerFunc(removeAccount))).Methods("DELETE")
+	r.HandleFunc("/createAccount", createAccount).Methods("POST")
+	r.HandleFunc("/editAccount", editAccount).Methods("PUT")
+	r.HandleFunc("/removeAccount", removeAccount).Methods("DELETE")
+	// r.HandleFunc("/removeAccount", middleware(http.HandlerFunc(removeAccount))).Methods("DELETE")
 	http.ListenAndServe("127.0.0.1:"+port, r)
 }
 
@@ -39,13 +41,13 @@ func validateUser(ctx context.Context, r *http.Request, userName, password strin
 	if userName == "medium" && password == "medium" {
 		return auth.NewDefaultUser("medium", "1", nil, nil), nil
 	}
-	return nil, fmt.Errorf("Invalid credentials")
+	return nil, fmt.Errorf("invalid credentials")
 }
 
 func verifyToken(ctx context.Context, r *http.Request, tokenString string) (auth.Info, error) {
 	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("Unexpected signing method: %v", token.Header["alg"])
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return []byte("secret"), nil
 	})
@@ -56,7 +58,7 @@ func verifyToken(ctx context.Context, r *http.Request, tokenString string) (auth
 		user := auth.NewDefaultUser(claims["medium"].(string), "", nil, nil)
 		return user, nil
 	}
-	return nil, fmt.Errorf("Invaled token")
+	return nil, fmt.Errorf("invaled token")
 }
 
 func setupGoGuardian() {
@@ -94,11 +96,6 @@ func createToken(w http.ResponseWriter, r *http.Request) {
 }
 func createAccount(w http.ResponseWriter, r *http.Request) {
 
-	// if err != nil {
-	// 	code := http.StatusInternalServerError
-	// 	http.Error(w, err.Error(), code)
-	// 	return
-	// }
 	decoder := json.NewDecoder(r.Body)
 	var newUser model.User
 	err := decoder.Decode(&newUser)
@@ -110,14 +107,64 @@ func createAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	newUser.Id = uuid.NewString()
-	err = mongo.CreateUser(newUser)
+	result, err := mongo.CreateUser(newUser)
 	if err != nil {
-		log.Panicln(err)
+		code := http.StatusNotAcceptable
+		http.Error(w, err.Error(), code)
 		return
 	}
+	w.WriteHeader(http.StatusCreated)
+	w.Write([]byte(result.(string)))
 
 }
 func editAccount(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	var newUser model.User
+	err := decoder.Decode(&newUser)
+
+	if err != nil {
+		code := http.StatusBadRequest
+		http.Error(w, err.Error(), code)
+		return
+	}
+
+	updatedUserBson, err := mongo.EditUser(newUser)
+	if err != nil {
+		code := http.StatusInternalServerError
+		http.Error(w, err.Error(), code)
+		return
+	}
+
+	var updatedUser model.User
+
+	bson.Unmarshal(updatedUserBson, &updatedUser)
+
+	updatedUser.ClearUserDetails()
+
+	w.WriteHeader(http.StatusAccepted)
+	w.Write(updatedUser.ToJSON())
 }
+
 func removeAccount(w http.ResponseWriter, r *http.Request) {
+	decoder := json.NewDecoder(r.Body)
+	var newUser model.User
+	err := decoder.Decode(&newUser)
+
+	if err != nil {
+		code := http.StatusBadRequest
+		http.Error(w, err.Error(), code)
+		return
+	}
+
+	_, err = mongo.DeleteUser(newUser)
+	if err != nil {
+		code := http.StatusInternalServerError
+		http.Error(w, err.Error(), code)
+		return
+	}
+
+	newUser.ClearUserDetails()
+
+	w.WriteHeader(http.StatusAccepted)
+	w.Write(newUser.ToJSON())
 }

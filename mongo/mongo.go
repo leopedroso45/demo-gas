@@ -2,7 +2,6 @@ package mongo
 
 import (
 	"context"
-	"crypto/sha1"
 	"fmt"
 	"log"
 
@@ -20,7 +19,6 @@ func createClient() (*mongo.Client, context.Context, error) {
 	cred.Password = "password"
 	//mongoURI := os.Getenv("MONGO_URI")
 	mongoURI := "mongodb://localhost:27017"
-	fmt.Println("--------mongo" + mongoURI)
 	client, err := mongo.NewClient(options.Client().ApplyURI(mongoURI).SetAuth(cred))
 	if err != nil {
 		log.Printf(`MongoDB can't create the client %s `, err)
@@ -35,30 +33,74 @@ func createClient() (*mongo.Client, context.Context, error) {
 	return client, ctx, nil
 }
 
-func CreateUser(newUser model.User) error {
+func CreateUser(newUser model.User) (interface{}, error) {
 	client, ctx, err := createClient()
 	if err != nil {
-		fmt.Println("--------mongo111111111")
-		log.Panicln(err)
-		return err
+		log.Panicln("Error creating mongodb client", err)
+		return nil, err
 	}
 	demogasDb := client.Database("demogas")
 	usersCollection := demogasDb.Collection("users")
 
-	result, err := usersCollection.InsertOne(ctx, bson.M{"_id": newUser.Id, "name": newUser.Name, "username": newUser.Username, "email": newUser.Email, "password": toSha1(newUser.Password)})
-	if err != nil {
-		fmt.Println("--------mongo2222222")
-		log.Panicln(err)
-		return err
+	emailCheck := usersCollection.FindOne(ctx, bson.M{"email": newUser.Email})
+	usernameCheck := usersCollection.FindOne(ctx, bson.M{"username": newUser.Username})
+	if emailCheck.Err() == nil {
+		return nil, fmt.Errorf("user with email: %s already exists", newUser.Email)
+	} else if usernameCheck.Err() == nil {
+		return nil, fmt.Errorf("user with username: %s already exists", newUser.Username)
 	}
-	fmt.Println("Result:", result)
+	newUser.PassToSha1()
+	result, err := usersCollection.InsertOne(ctx, newUser.ToBSON())
+	if err != nil {
+		return nil, fmt.Errorf("error inserting a new document - %s", err)
+	}
+	fmt.Println("Result:", result.InsertedID)
 	defer client.Disconnect(ctx)
-	return nil
+	return result.InsertedID, nil
 }
 
-func toSha1(value string) string {
-	h := sha1.New()
-	h.Write([]byte(value))
-	bs := h.Sum(nil)
-	return string(bs)
+func DeleteUser(newUser model.User) ([]byte, error) {
+	client, ctx, err := createClient()
+	if err != nil {
+		log.Panicln("Error creating mongodb client", err)
+		return nil, err
+	}
+	demogasDb := client.Database("demogas")
+	usersCollection := demogasDb.Collection("users")
+
+	newUser.PassToSha1()
+	result := usersCollection.FindOneAndDelete(ctx, bson.M{"email": newUser.Email, "password": newUser.Password})
+
+	deletedUser, err := result.DecodeBytes()
+
+	if err != nil {
+		fmt.Println("Something went wrong decoding the deleted user to bson ", err)
+		return deletedUser, err
+	}
+
+	defer client.Disconnect(ctx)
+	return deletedUser, nil
+}
+
+func EditUser(newUser model.User) ([]byte, error) {
+	client, ctx, err := createClient()
+	if err != nil {
+		log.Panicln("Error creating mongodb client", err)
+		return nil, err
+	}
+	demogasDb := client.Database("demogas")
+	usersCollection := demogasDb.Collection("users")
+
+	newUser.PassToSha1()
+	result := usersCollection.FindOneAndUpdate(ctx, bson.M{"email": newUser.Email}, bson.M{"$set": bson.M{"name": newUser.Name, "password": newUser.Password, "username": newUser.Username}})
+
+	if result.Err() != nil {
+		fmt.Println("Something went wrong updating data ", err)
+		return nil, err
+	}
+
+	resultBson, _ := result.DecodeBytes()
+
+	defer client.Disconnect(ctx)
+	return resultBson, nil
 }
